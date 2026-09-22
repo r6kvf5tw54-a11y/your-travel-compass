@@ -22,10 +22,18 @@ export interface Place {
   foodTags?: FoodPref[];
   priceLevel: 1 | 2 | 3 | 4; // $ to $$$$
   distanceKm: number;
-  rating: number;
-  reviews: number;
+  /** Only present for curated (demo) places — live OSM data has no ratings. */
+  rating?: number;
+  reviews?: number;
   premium?: boolean;
   whyRecommended?: string;
+  /** 0–100 personal fit, computed from onboarding answers. */
+  match?: number;
+  /** How rich the source data is (wikipedia, website, hours…). */
+  quality?: number;
+  lat?: number;
+  lon?: number;
+  website?: string;
 }
 
 export interface OnboardingState {
