@@ -60,7 +60,8 @@ const Discover = ({ onboarding, favorites, onToggleFavorite, onRestart }: Props)
     queryKey: ["places", onboarding.destination, [...onboarding.categories].sort().join("+")],
     queryFn: () => fetchPlaces(onboarding.destination, onboarding.categories),
     staleTime: 24 * 60 * 60 * 1000,
-    retry: 1,
+    retry: 0, // mirrors + backoff are handled inside fetchPlaces
+    refetchOnWindowFocus: false,
   });
 
   const usingFallback = live.isError || (live.isSuccess && live.data.places.length === 0);
