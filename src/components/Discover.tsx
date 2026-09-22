@@ -1,9 +1,24 @@
 import { useMemo, useState } from "react";
-import { Heart, MapPin, Search, SlidersHorizontal, Sparkles, Utensils, Hotel as HotelIcon, Dumbbell, Mountain } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import {
+  Heart,
+  MapPin,
+  Search,
+  SlidersHorizontal,
+  Sparkles,
+  Utensils,
+  Hotel as HotelIcon,
+  Dumbbell,
+  Mountain,
+  Loader2,
+  RefreshCw,
+  WifiOff,
+} from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { PLACES } from "@/data/places";
+import { fetchPlaces, matchScore, whyRecommended } from "@/lib/places-api";
 import PlaceCard from "./PlaceCard";
 import PlaceDetails from "./PlaceDetails";
 import type { Category, OnboardingState, Place } from "@/types";
@@ -40,20 +55,30 @@ const Discover = ({ onboarding, favorites, onToggleFavorite, onRestart }: Props)
   const [showFavoritesOnly, setShowFavoritesOnly] = useState(false);
   const [active, setActive] = useState<Place | null>(null);
 
+  // Live places for the destination (OpenStreetMap). Falls back to the curated demo set.
+  const live = useQuery({
+    queryKey: ["places", onboarding.destination, [...onboarding.categories].sort().join("+")],
+    queryFn: () => fetchPlaces(onboarding.destination, onboarding.categories),
+    staleTime: 24 * 60 * 60 * 1000,
+    retry: 1,
+  });
+
+  const usingFallback = live.isError || (live.isSuccess && live.data.places.length === 0);
+  const livePlaces = live.data?.places;
+  const basePlaces = useMemo<Place[]>(
+    () => (usingFallback ? PLACES : (livePlaces ?? [])),
+    [usingFallback, livePlaces],
+  );
+  const destinationLabel = live.data?.destination.label ?? onboarding.destination ?? "Your destination";
+
   const enriched = useMemo(() => {
-    // Apply "why we recommend" personalization based on onboarding
-    return PLACES.map((p) => {
-      if (p.whyRecommended) return p;
-      const matchedFood = p.foodTags?.filter((f) => onboarding.foodPrefs.includes(f)) ?? [];
-      if (matchedFood.length) {
-        return { ...p, whyRecommended: `Matches your taste for ${matchedFood.slice(0, 2).join(" & ")}` };
-      }
-      if (onboarding.categories.includes(p.category)) {
-        return { ...p, whyRecommended: `One of the best ${p.category}s in the area` };
-      }
-      return p;
-    });
-  }, [onboarding]);
+    // Apply "why we recommend" + personal match based on onboarding
+    return basePlaces.map((p) => ({
+      ...p,
+      match: p.match ?? matchScore(p, onboarding.foodPrefs, onboarding.categories),
+      whyRecommended: p.whyRecommended ?? whyRecommended(p, onboarding.foodPrefs, onboarding.categories),
+    }));
+  }, [basePlaces, onboarding]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -68,16 +93,13 @@ const Discover = ({ onboarding, favorites, onToggleFavorite, onRestart }: Props)
       );
     });
     list = [...list].sort((a, b) => {
-      if (sort === "rating") return b.rating - a.rating;
+      if (sort === "rating") return (b.rating ?? (b.quality ?? 0) / 2) - (a.rating ?? (a.quality ?? 0) / 2);
       if (sort === "distance") return a.distanceKm - b.distanceKm;
       if (sort === "price") return a.priceLevel - b.priceLevel;
-      // recommended: matched food prefs first, then rating
-      const aScore = (a.foodTags?.filter((f) => onboarding.foodPrefs.includes(f)).length ?? 0) * 2 + a.rating;
-      const bScore = (b.foodTags?.filter((f) => onboarding.foodPrefs.includes(f)).length ?? 0) * 2 + b.rating;
-      return bScore - aScore;
+      return (b.match ?? 0) - (a.match ?? 0) || a.distanceKm - b.distanceKm;
     });
     return list;
-  }, [enriched, tab, query, showFavoritesOnly, favorites, sort, onboarding.foodPrefs]);
+  }, [enriched, tab, query, showFavoritesOnly, favorites, sort]);
 
   return (
     <main className="relative min-h-screen pb-16">
@@ -88,10 +110,15 @@ const Discover = ({ onboarding, favorites, onToggleFavorite, onRestart }: Props)
             <p className="text-xs font-semibold uppercase tracking-[0.2em] text-primary">Your trip</p>
             <h1 className="mt-1 flex items-center gap-2 text-2xl font-bold sm:text-3xl">
               <MapPin className="h-6 w-6 text-primary" />
-              {onboarding.destination || "Your destination"}
+              {destinationLabel}
             </h1>
             <p className="mt-0.5 text-sm text-muted-foreground">
-              From {onboarding.origin || "home"} · curated for you
+              From {onboarding.origin || "home"} ·{" "}
+              {live.isPending
+                ? "finding places…"
+                : usingFallback
+                  ? "showing demo places"
+                  : `${basePlaces.length} live places · curated for you`}
             </p>
           </div>
           <Button
@@ -176,7 +203,37 @@ const Discover = ({ onboarding, favorites, onToggleFavorite, onRestart }: Props)
 
       {/* Grid */}
       <section className="mx-auto mt-6 max-w-6xl px-5 sm:px-8">
-        {filtered.length === 0 ? (
+        {usingFallback && (
+          <div className="glass mb-4 flex flex-wrap items-center gap-3 rounded-2xl px-4 py-3 text-sm">
+            <WifiOff className="h-4 w-4 text-muted-foreground" />
+            <span className="text-muted-foreground">
+              {live.isError
+                ? `Couldn't load live places for “${onboarding.destination}” — ${live.error instanceof Error ? live.error.message : "network error"}.`
+                : `No places found near “${onboarding.destination}” yet.`}{" "}
+              Showing our curated demo set instead.
+            </span>
+            <Button variant="ghost" size="sm" className="ml-auto rounded-full" onClick={() => live.refetch()}>
+              <RefreshCw className="mr-1 h-3.5 w-3.5" /> Retry
+            </Button>
+          </div>
+        )}
+        {live.isPending ? (
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <div key={i} className="glass-strong animate-pulse overflow-hidden rounded-3xl">
+                <div className="aspect-[4/3] bg-secondary" />
+                <div className="space-y-2 p-4">
+                  <div className="h-4 w-2/3 rounded bg-secondary" />
+                  <div className="h-3 w-1/3 rounded bg-secondary" />
+                  <div className="h-3 w-full rounded bg-secondary" />
+                </div>
+              </div>
+            ))}
+            <p className="col-span-full flex items-center justify-center gap-2 py-4 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" /> Asking OpenStreetMap about {onboarding.destination}…
+            </p>
+          </div>
+        ) : filtered.length === 0 ? (
           <div className="glass mt-10 rounded-3xl p-12 text-center">
             <p className="text-lg font-semibold">No places match yet</p>
             <p className="mt-1 text-sm text-muted-foreground">Try a different category or clear your search.</p>
