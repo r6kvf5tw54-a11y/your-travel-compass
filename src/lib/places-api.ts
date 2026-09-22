@@ -24,13 +24,26 @@ export type Destination = GeoPoint & {
 };
 
 const CACHE_TTL = 24 * 60 * 60 * 1000;
-const SEARCH_RADIUS_M = 3500;
+const SEARCH_RADIUS_M = 3000;
 const PER_CATEGORY = 24;
+const OVERPASS_TIMEOUT_S = 20;
+const FETCH_TIMEOUT_MS = 28_000;
+const PHOTO_TIMEOUT_MS = 8_000;
 
 const OVERPASS_ENDPOINTS = [
   "https://overpass-api.de/api/interpreter",
+  "https://overpass.private.coffee/api/interpreter",
   "https://overpass.kumi.systems/api/interpreter",
 ];
+
+/** fetch() with a hard deadline, so a hanging mirror never blocks the UI. */
+function fetchWithTimeout(url: string, init: RequestInit, ms: number): Promise<Response> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), ms);
+  return fetch(url, { ...init, signal: ctrl.signal }).finally(() => clearTimeout(timer));
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /* ---------------- cache ---------------- */
 
@@ -72,7 +85,7 @@ export async function geocode(query: string): Promise<Destination> {
   const url =
     "https://nominatim.openstreetmap.org/search?format=json&limit=1&addressdetails=1&accept-language=en&q=" +
     encodeURIComponent(q);
-  const res = await fetch(url, { headers: { Accept: "application/json" } });
+  const res = await fetchWithTimeout(url, { headers: { Accept: "application/json" } }, 12_000);
   if (!res.ok) throw new Error(`Geocoding failed (${res.status})`);
   const hits = (await res.json()) as NominatimHit[];
   const hit = hits[0];
@@ -120,26 +133,40 @@ function buildQuery(center: GeoPoint, categories: Category[]): string {
   const parts: string[] = [];
   for (const cat of categories) {
     for (const f of CATEGORY_FILTERS[cat]) {
-      parts.push(`nwr${f}["name"]${around};`);
+      // nodes + ways only: relations are rare for venues and slow to resolve
+      parts.push(`nw${f}["name"]${around};`);
     }
   }
-  return `[out:json][timeout:25];(${parts.join("")});out tags center ${categories.length * 120};`;
+  return `[out:json][timeout:${OVERPASS_TIMEOUT_S}];(${parts.join("")});out tags center ${categories.length * 120};`;
 }
 
 async function overpass(query: string): Promise<OsmElement[]> {
   let lastErr: unknown;
   for (const endpoint of OVERPASS_ENDPOINTS) {
-    try {
-      const res = await fetch(endpoint, {
-        method: "POST",
-        body: "data=" + encodeURIComponent(query),
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      });
-      if (!res.ok) throw new Error(`Overpass ${res.status}`);
-      const json = (await res.json()) as { elements: OsmElement[] };
-      return json.elements;
-    } catch (e) {
-      lastErr = e;
+    // Two attempts per mirror: 429 (rate-limited) usually clears within a few seconds.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const res = await fetchWithTimeout(
+          endpoint,
+          {
+            method: "POST",
+            body: "data=" + encodeURIComponent(query),
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          },
+          FETCH_TIMEOUT_MS,
+        );
+        if (res.status === 429 || res.status === 504) {
+          lastErr = new Error(`Overpass busy (${res.status})`);
+          await sleep(2500);
+          continue;
+        }
+        if (!res.ok) throw new Error(`Overpass ${res.status}`);
+        const json = (await res.json()) as { elements: OsmElement[] };
+        return json.elements;
+      } catch (e) {
+        lastErr = e;
+        break; // network error / timeout → next mirror
+      }
     }
   }
   throw lastErr instanceof Error ? lastErr : new Error("Places service unavailable");
@@ -323,7 +350,7 @@ async function wikiThumbs(titlesByLang: Map<string, string[]>): Promise<Map<stri
         `https://${lang}.wikipedia.org/w/api.php?action=query&format=json&origin=*&prop=pageimages&piprop=thumbnail&pithumbsize=900&redirects=1&titles=` +
         encodeURIComponent(chunk.join("|"));
       jobs.push(
-        fetch(url)
+        fetchWithTimeout(url, {}, PHOTO_TIMEOUT_MS)
           .then((r) => r.json())
           .then((j: { query?: { pages?: Record<string, { title: string; thumbnail?: { source: string } }>; normalized?: { from: string; to: string }[]; redirects?: { from: string; to: string }[] } }) => {
             const back = new Map<string, string>();
