@@ -43,11 +43,18 @@ const PlaceDetails = ({ place, favorite, onClose, onToggleFavorite }: Props) => 
               </SheetHeader>
 
               <div className="mt-2 flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
-                <span className="flex items-center gap-1">
-                  <Star className="h-4 w-4 fill-accent text-accent" />
-                  <span className="font-semibold text-foreground">{place.rating.toFixed(1)}</span>
-                  <span>({place.reviews} reviews)</span>
-                </span>
+                {place.rating !== undefined ? (
+                  <span className="flex items-center gap-1">
+                    <Star className="h-4 w-4 fill-accent text-accent" />
+                    <span className="font-semibold text-foreground">{place.rating.toFixed(1)}</span>
+                    <span>({place.reviews} reviews)</span>
+                  </span>
+                ) : (
+                  <span className="flex items-center gap-1">
+                    <Sparkles className="h-4 w-4 text-primary" />
+                    <span className="font-semibold text-foreground">{place.match ?? 50}% match</span>
+                  </span>
+                )}
                 <span className="flex items-center gap-1">
                   <MapPin className="h-4 w-4" />
                   {place.city}, {place.country} · {place.distanceKm.toFixed(1)} km away
@@ -77,12 +84,32 @@ const PlaceDetails = ({ place, favorite, onClose, onToggleFavorite }: Props) => 
                 </div>
               </div>
 
-              <Button
-                size="lg"
-                className="mt-8 h-14 w-full rounded-full bg-gradient-primary text-base font-semibold text-primary-foreground shadow-glow transition-smooth hover:opacity-95"
-              >
-                View on map
-              </Button>
+              <div className="mt-8 grid gap-3 sm:grid-cols-2">
+                <Button
+                  asChild
+                  size="lg"
+                  className="h-14 w-full rounded-full bg-gradient-primary text-base font-semibold text-primary-foreground shadow-glow transition-smooth hover:opacity-95"
+                >
+                  <a
+                    href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+                      place.lat !== undefined && place.lon !== undefined
+                        ? `${place.name} @${place.lat.toFixed(5)},${place.lon.toFixed(5)}`
+                        : `${place.name}, ${place.city}`,
+                    )}`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Open in Maps
+                  </a>
+                </Button>
+                {place.website && (
+                  <Button asChild variant="outline" size="lg" className="h-14 w-full rounded-full text-base font-semibold">
+                    <a href={place.website} target="_blank" rel="noreferrer">
+                      Website
+                    </a>
+                  </Button>
+                )}
+              </div>
             </div>
           </>
         )}
