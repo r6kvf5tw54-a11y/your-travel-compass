@@ -51,9 +51,18 @@ const PlaceCard = ({ place, favorite, onToggleFavorite, onClick }: Props) => {
         </div>
         {/* Bottom rating chip */}
         <div className="absolute bottom-3 left-3 flex items-center gap-1.5 rounded-full bg-background/85 px-2.5 py-1 backdrop-blur-md">
-          <Star className="h-3.5 w-3.5 fill-accent text-accent" />
-          <span className="text-xs font-semibold">{place.rating.toFixed(1)}</span>
-          <span className="text-xs text-muted-foreground">({place.reviews})</span>
+          {place.rating !== undefined ? (
+            <>
+              <Star className="h-3.5 w-3.5 fill-accent text-accent" />
+              <span className="text-xs font-semibold">{place.rating.toFixed(1)}</span>
+              <span className="text-xs text-muted-foreground">({place.reviews})</span>
+            </>
+          ) : (
+            <>
+              <Sparkles className="h-3.5 w-3.5 text-primary" />
+              <span className="text-xs font-semibold">{place.match ?? 50}% match</span>
+            </>
+          )}
         </div>
       </div>
 
